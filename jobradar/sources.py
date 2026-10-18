@@ -27,8 +27,36 @@ def _norm(company, title, url, location="", posted_at=None, description="", sour
         "posted_at": posted_at,          # epoch seconds, or None if the board hides it
         "description": (description or "")[:6000],
         "source": source,
-        "domain": domain,
+        "domain": (domain or "").strip() if isinstance(domain, str) else "",
     }
+
+
+def _clean_jobs(jobs: list[dict]) -> list[dict]:
+    """Keep usable postings and normalize optional text fields consistently.
+
+    A single incomplete record should not make an otherwise healthy board
+    unusable. Company, title, and URL are required to track a posting safely.
+    """
+    cleaned = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        company = str(job.get("company") or "").strip()
+        title = str(job.get("title") or "").strip()
+        url = str(job.get("url") or "").strip()
+        if not company or not title or not url:
+            continue
+        job["company"] = company
+        job["title"] = title
+        job["url"] = url
+        job["location"] = str(job.get("location") or "").strip()
+        job["description"] = str(job.get("description") or "")[:6000]
+        job["source"] = str(job.get("source") or "").strip()
+        job["domain"] = str(job.get("domain") or "").strip()
+        if job.get("posted_at") == "":
+            job["posted_at"] = None
+        cleaned.append(job)
+    return cleaned
 
 
 def _get(url: str) -> Any:
@@ -109,7 +137,7 @@ def fetch_company(entry: dict) -> tuple[list[dict], str | None]:
         jobs = fn(entry["name"], entry["slug"])
         for j in jobs:
             j["domain"] = entry.get("domain", "")
-        return jobs, None
+        return _clean_jobs(jobs), None
     except Exception as e:  # noqa: BLE001
         return [], f"{type(e).__name__}: {e}"
 
@@ -120,12 +148,12 @@ def fetch_company(entry: dict) -> tuple[list[dict], str | None]:
 
 def remotive(query: str, limit: int = 40) -> list[dict]:
     data = _get(f"https://remotive.com/api/remote-jobs?search={requests.utils.quote(query)}&limit={limit}")
-    return [
+    return _clean_jobs([
         _norm(j.get("company_name", "?"), j.get("title"), j.get("url"),
               j.get("candidate_required_location", "Remote"),
               _epoch(j.get("publication_date")), j.get("description", ""), "remotive")
         for j in data.get("jobs", [])[:limit]
-    ]
+    ])
 
 
 def arbeitnow(query: str, limit: int = 40) -> list[dict]:
@@ -140,7 +168,7 @@ def arbeitnow(query: str, limit: int = 40) -> list[dict]:
                              j.get("description", ""), "arbeitnow"))
         if len(out) >= limit:
             break
-    return out
+    return _clean_jobs(out)
 
 
 def discover(queries: list[str], max_per_query: int = 40) -> tuple[list[dict], list[str]]:
